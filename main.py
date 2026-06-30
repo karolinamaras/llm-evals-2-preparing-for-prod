@@ -220,7 +220,7 @@ def main():
     review_user_prompt = review_system_lf_prompt.get_langchain_prompt()[1]
 
     # Text prompt
-    goodbye_lf_prompt = goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt", label='dev')
+    goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt", label='dev')
     goodbye_system_prompt = goodbye_lf_prompt.get_langchain_prompt()
 
     context_prompt = ChatPromptTemplate.from_messages(
