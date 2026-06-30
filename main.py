@@ -212,37 +212,32 @@ def main():
     llm_with_tools = llm.bind_tools(tools)
 
     context_lf_prompt = langfuse.get_prompt("context_system_prompt", label='dev')
-    context_system_prompt = context_lf_prompt.get_langchain_prompt()[0]
-    user_prompt = context_lf_prompt.get_langchain_prompt()[1]
 
     review_system_lf_prompt = langfuse.get_prompt("review_system_prompt", label='dev')
-    review_system_prompt = review_system_lf_prompt.get_langchain_prompt()[0]
-    review_user_prompt = review_system_lf_prompt.get_langchain_prompt()[1]
 
     # Text prompt
     goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt", label='dev')
-    goodbye_system_prompt = goodbye_lf_prompt.get_langchain_prompt()
 
     context_prompt = ChatPromptTemplate.from_messages(
         [
-            context_system_prompt,
+            context_lf_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="conversation"),
-            user_prompt,
+            context_lf_prompt.get_langchain_prompt()[1],
         ]
     )
     context_prompt.metadata = {"langfuse_prompt": context_lf_prompt}
 
     review_prompt = ChatPromptTemplate.from_messages(
         [
-            review_system_prompt,
+            review_system_lf_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="conversation"),
-            review_user_prompt
+            review_system_lf_prompt.get_langchain_prompt()[1]
         ]
     )
     review_prompt.metadata = {"langfuse_prompt": review_system_lf_prompt}
 
     goodbye_prompt = PromptTemplate.from_template(
-        goodbye_system_prompt
+        goodbye_lf_prompt.get_langchain_prompt()
     )
     goodbye_prompt.metadata = {"langfuse_prompt": goodbye_lf_prompt}
 
