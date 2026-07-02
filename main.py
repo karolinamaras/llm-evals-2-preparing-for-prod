@@ -6,6 +6,7 @@ import uuid
 
 import dotenv
 from langchain_community.docstore.document import Document
+from langchain_core.globals import set_debug
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate, PromptTemplate
 from langchain_core.tools import tool
@@ -17,6 +18,11 @@ from langfuse import observe, propagate_attributes, get_client
 from langfuse.langchain import CallbackHandler
 
 from langchain_redis import RedisChatMessageHistory
+
+from nemoguardrails import RailsConfig
+from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+
+# set_debug(True)
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -40,6 +46,12 @@ embeddings_model = OpenAIEmbeddings(
     api_key=os.getenv("OPENAI_API_KEY"),
     show_progress_bar=True
 )
+
+# Load guardrails configuration
+config = RailsConfig.from_path("config/")
+
+# Create guardrails instance for input validation only
+input_rails = RunnableRails(config, input_key="user_input")
 
 # Initialize Redis history with TTL = 1hr
 redis_history = RedisChatMessageHistory(session_id, redis_url=os.getenv("REDIS_CONNECTION_STRING"), ttl=3600)
@@ -316,16 +328,38 @@ def main():
             conversation.append(user_message)
 
             # Create a parent span for this user query to group all chain invocations
-            with langfuse.start_as_current_observation(
+            with (langfuse.start_as_current_observation(
                 as_type="span",
                 name="user-query",
                 input={"user_input": user_input}
-            ) as span:
+            ) as span):
                 # Propagate trace attributes to all child observations
                 with propagate_attributes(
                     session_id=session_id,
                     user_id=user_id
                 ):
+                    # Validate input with guardrails BEFORE invoking chains
+                    validation_result = input_rails.invoke(
+                        {"user_input": user_input},
+                        config={"run_name": "input-validation", "callbacks": [langfuse_handler]}
+                    )
+
+                    print("validation_result: ", validation_result)
+
+                    if isinstance(validation_result,AIMessage):
+                        print("validation_result is AIMessage")
+                    else:
+                        print("validation_result is not AIMessage")
+                        print("validation_result type: ", type(validation_result))
+
+                    # Check if input rail was triggered using metadata (not string matching)
+                    rail_triggered = isinstance(validation_result,AIMessage) and validation_result.response_metadata.get("rails_triggered", False)
+
+                    if rail_triggered:
+                        # Rail triggered - skip further processing
+                        print(f"System (validation_result): {validation_result.content}")
+                        continue  # Skip saving to Redis and proceed to next input
+
                     # Context chain invocation
                     context_ai_message = context_chain.invoke(
                         {"user_input": user_input, "conversation": conversation},
@@ -348,7 +382,7 @@ def main():
                 # Set the output on the parent span
                 span.update(output={"response": response.content})
 
-            print(f"System: {response.content}")
+            print(f"System (response): {response.content}")
             redis_history.add_message(HumanMessage(content=user_input))
             redis_history.add_message(AIMessage(content=response.content))
             # print("....." * 10)
