@@ -3,10 +3,11 @@ import json
 import os
 import sys
 import uuid
+from functools import partial
 
 import dotenv
 from langchain_community.docstore.document import Document
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate, PromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -15,6 +16,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from langfuse import observe, propagate_attributes, get_client
 from langfuse.langchain import CallbackHandler
+
+from langchain_redis import RedisChatMessageHistory
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -39,8 +42,8 @@ embeddings_model = OpenAIEmbeddings(
     show_progress_bar=True
 )
 
-# Initialize conversation history
-conversation = []
+# Initialize Redis history with TTL = 1hr
+redis_history = RedisChatMessageHistory(session_id, redis_url=os.getenv("REDIS_CONNECTION_STRING"), ttl=3600)
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -165,13 +168,18 @@ def smartphone_info_tool(model: str) -> str:
 # Tool Call Handling and Response Generation
 # ---------------------------
 @observe(name="generate_context")
-def generate_context(ai_message: AIMessage) -> None:
+def generate_context(ai_message: AIMessage, conversation: list) -> None:
     """
-    Process tool calls from the language model and append the AI message and
-    each tool's response as ToolMessage objects to the conversation history.
+    Calls tools, constructs, and manages the context of a conversation by appending AI-generated
+    messages and their associated tool outputs to the conversation history.
 
-    :param
-        ai_message (AIMessage): The language model's output message containing tool_calls.
+    Parameters:
+    ai_message (AIMessage): The AI-generated message containing tool calls and additional content.
+    conversation (list): A list representing the conversation history, where AI
+    messages and tool outputs will be appended.
+
+    Raises:
+    Exception: If an error occurs during the processing of tool calls.
     """
     # construct the conversation history with the AI message containing tool calls
     conversation.append(ai_message)
@@ -205,6 +213,7 @@ def generate_context(ai_message: AIMessage) -> None:
 # Main Conversation Loop
 # ---------------------------
 def main():
+    print("Session: ", session_id)
     # List of available tools
     tools = [smartphone_info_tool]
 
@@ -239,7 +248,15 @@ def main():
     )
     goodbye_prompt.metadata = {"langfuse_prompt": goodbye_lf_prompt}
 
-    context_chain = context_prompt | llm_with_tools | generate_context
+    trimmer = trim_messages(
+        strategy="last",
+        token_counter=llm,
+        max_tokens=500,
+        start_on="human",
+        end_on=("human", "tool"),
+        include_system=True,
+    )
+    context_chain = context_prompt | trimmer | llm_with_tools
     review_chain = review_prompt | llm
 
     goodbye_chain = goodbye_prompt | llm
@@ -250,6 +267,10 @@ def main():
     try:
         print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
         while True:
+            # Load conversation history from Redis
+            conversation = list(redis_history.messages)
+            # print("conversation loaded from redis history", conversation)
+            
             user_input = input("User: ").strip()
             if user_input.lower() in ["exit", "quit", "bye", "end"]:
                 # Create a parent span for the goodbye message
@@ -291,7 +312,9 @@ def main():
                 print("\nThank you for your feedback!")
                 break
 
-            conversation.append(HumanMessage(user_input))
+            # Add user input to in-memory conversation
+            user_message = HumanMessage(user_input)
+            conversation.append(user_message)
 
             # Create a parent span for this user query to group all chain invocations
             with langfuse.start_as_current_observation(
@@ -305,13 +328,14 @@ def main():
                     user_id=user_id
                 ):
                     # Context chain invocation
-                    context_chain.invoke(
+                    context_ai_message = context_chain.invoke(
                         {"user_input": user_input, "conversation": conversation},
                         config={
                             "run_name": "context",
                             "callbacks": [langfuse_handler]
                         }
                     )
+                    generate_context(context_ai_message, conversation)
 
                     # Final response chain invocation
                     response = review_chain.invoke(
@@ -326,7 +350,12 @@ def main():
                 span.update(output={"response": response.content})
 
             print(f"System: {response.content}")
-            conversation.append(response)
+            redis_history.add_message(HumanMessage(content=user_input))
+            redis_history.add_message(AIMessage(content=response.content))
+            # print("....." * 10)
+            # print(f"conversation: {conversation}")
+            # print("....." * 10)
+
 
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")
