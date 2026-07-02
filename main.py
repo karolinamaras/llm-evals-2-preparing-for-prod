@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import uuid
-from functools import partial
 
 import dotenv
 from langchain_community.docstore.document import Document
