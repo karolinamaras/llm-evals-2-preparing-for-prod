@@ -211,9 +211,9 @@ def main():
     # Bind the tools to the language model instance
     llm_with_tools = llm.bind_tools(tools)
 
-    context_lf_prompt = langfuse.get_prompt("context_system_prompt", label='dev')
+    context_lf_prompt = langfuse.get_prompt("context_system_prompt", label='dev', type="chat")
 
-    review_system_lf_prompt = langfuse.get_prompt("review_system_prompt", label='dev')
+    review_system_lf_prompt = langfuse.get_prompt("review_system_prompt", label='dev', type="chat")
 
     # Text prompt
     goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt", label='dev')
@@ -222,7 +222,6 @@ def main():
         [
             context_lf_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="conversation"),
-            context_lf_prompt.get_langchain_prompt()[1],
         ]
     )
     context_prompt.metadata = {"langfuse_prompt": context_lf_prompt}
@@ -231,7 +230,6 @@ def main():
         [
             review_system_lf_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="conversation"),
-            review_system_lf_prompt.get_langchain_prompt()[1]
         ]
     )
     review_prompt.metadata = {"langfuse_prompt": review_system_lf_prompt}
