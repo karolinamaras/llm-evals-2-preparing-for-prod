@@ -51,6 +51,7 @@ embeddings_model = OpenAIEmbeddings(
 config = RailsConfig.from_path("config/")
 
 # Create guardrails instance for input validation only
+#https://docs.nvidia.com/nemo/guardrails/latest/integration-with-third-party-libraries/langchain/runnable-rails
 input_rails = RunnableRails(config, input_key="user_input")
 
 # Initialize Redis history with TTL = 1hr
@@ -346,20 +347,15 @@ def main():
 
                     print("validation_result: ", validation_result)
 
-                    if isinstance(validation_result,AIMessage):
-                        print("validation_result is AIMessage")
-                    else:
-                        print("validation_result is not AIMessage")
-                        print("validation_result type: ", type(validation_result))
-
                     # Check if input rail was triggered using metadata (not string matching)
-                    rail_triggered = isinstance(validation_result,AIMessage) and validation_result.response_metadata.get("rails_triggered", False)
+                    rail_triggered = isinstance(validation_result, dict) and "output" in validation_result
 
                     if rail_triggered:
                         # Rail triggered - skip further processing
-                        print(f"System (validation_result): {validation_result.content}")
+                        print(f"System (validation_result): {validation_result['output']}")
                         continue  # Skip saving to Redis and proceed to next input
 
+                    # Rail not triggered - continue with normal processing
                     # Context chain invocation
                     context_ai_message = context_chain.invoke(
                         {"user_input": user_input, "conversation": conversation},
