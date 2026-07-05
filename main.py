@@ -21,6 +21,7 @@ from langchain_redis import RedisChatMessageHistory
 
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+from nemoguardrails.rails.llm.options import GenerationOptions, GenerationRailsOptions
 
 # set_debug(True)
 
@@ -340,19 +341,30 @@ def main():
                     user_id=user_id
                 ):
                     # Validate input with guardrails BEFORE invoking chains
-                    validation_result = input_rails.invoke(
-                        {"user_input": user_input},
-                        config={"run_name": "input-validation", "callbacks": [langfuse_handler]}
+                    validation_result = input_rails.rails.generate(
+                        messages=[
+                            {"role": "user", "content": user_input}
+                        ],
+                        options=GenerationOptions(
+                            rails=["input"],
+                            output_vars=["allowed", "triggered_input_rail", "bot_message"],
+                            config={"run_name": "input-validation", "callbacks": [langfuse_handler]}
+                        ),
                     )
 
-                    print("validation_result: ", validation_result)
+                    # print("validation_result: ", validation_result)
+                    validation_context = validation_result.output_data or {}
 
                     # Check if input rail was triggered using metadata (not string matching)
-                    rail_triggered = isinstance(validation_result, dict) and "output" in validation_result
+                    rail_triggered = validation_context.get("allowed") is False or bool(
+                        validation_context.get("triggered_input_rail"))
 
                     if rail_triggered:
                         # Rail triggered - skip further processing
-                        print(f"System (validation_result): {validation_result['output']}")
+                        bot_msg = validation_context.get('bot_message')
+                        print(f"System (validation_result): {bot_msg}")
+                        # Set the output on the parent span
+                        span.update(output={"validation response": bot_msg})
                         continue  # Skip saving to Redis and proceed to next input
 
                     # Rail not triggered - continue with normal processing
